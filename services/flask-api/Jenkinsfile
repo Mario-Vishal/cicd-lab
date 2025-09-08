@@ -1,80 +1,120 @@
 pipeline {
-  agent none
+  agent any
 
   options {
     timestamps()
     disableConcurrentBuilds()
   }
 
-  /* Parameters allow you to flex without editing the Jenkinsfile */
   parameters {
     string(
       name: 'IMAGE_REPO',
       defaultValue: 'local',
-      description: 'Docker repository namespace (set to your Docker Hub username later for pushes)'
+      description: 'Docker repository namespace (e.g. your Docker Hub username)'
     )
     booleanParam(
       name: 'RUN_SMOKE',
       defaultValue: true,
-      description: 'Run the smoke test stage'
+      description: 'Run the smoke test'
     )
   }
 
   environment {
-    // Make available to make targets (passed explicitly in steps for clarity)
-    IMAGE_REPO = "${params.IMAGE_REPO}"
+    SERVICE_DIR = 'services/flask-api'
   }
 
   stages {
 
-    stage('Checkout & Inspect (Python Docker Agent)') {
-      agent {
-        docker {
-          image 'python:3.12-slim'
-          args '-u root:root'
-        }
-      }
+    stage('Checkout') {
       steps {
         checkout scm
-        sh 'echo ">>> VERSION:"; cat VERSION'
-        sh 'echo ">>> Python:"; python --version'
-        sh 'echo ">>> Git commit:"; git rev-parse --short HEAD'
-        sh 'echo ">>> Files:"; ls -1'
+        script {
+          def versionFile = "${env.SERVICE_DIR}/VERSION"
+          if (!fileExists(versionFile)) {
+            def auto = "0.0.${env.BUILD_NUMBER}"
+            writeFile file: versionFile, text: "${auto}\n"
+            echo "VERSION was missing. Created temporary version: ${auto}"
+          }
+          env.APP_VERSION = readFile(versionFile).trim()
+          env.GIT_SHORT = sh(returnStdout: true, script: 'git rev-parse --short HEAD').trim()
+          echo "APP_VERSION=${env.APP_VERSION}, GIT_SHORT=${env.GIT_SHORT}"
+        }
+        sh 'ls -1 ${SERVICE_DIR} | head -50'
+      }
+    }
+
+    stage('Python Build & Tests') {
+      steps {
+        script {
+          docker.image('python:3.12-slim').inside('-u root:root') {
+            dir(env.SERVICE_DIR) {
+              sh '''
+                set -eux
+                python --version
+                if [ -f requirements.txt ]; then pip install --no-cache-dir -r requirements.txt; fi
+                if ls tests/*.py >/dev/null 2>&1; then
+                  pip install --no-cache-dir pytest
+                  pytest -q
+                else
+                  echo "No tests found."
+                fi
+              '''
+            }
+          }
+        }
       }
     }
 
     stage('Build Image') {
-      // If your controller node label shows as "master", change 'built-in' to 'master'
-      agent { label 'built-in' }
       steps {
-        sh 'echo "Building with IMAGE_REPO=${IMAGE_REPO}"'
-        sh 'IMAGE_REPO=${IMAGE_REPO} make ci-build'
+        sh '''
+          set -eux
+          IMAGE_REPO='${IMAGE_REPO}'
+          APP_VERSION='${APP_VERSION}'
+          # Use the service Makefile
+          IMAGE_REPO=$IMAGE_REPO APP_VERSION=$APP_VERSION make -C ${SERVICE_DIR} ci-build
+        '''
       }
     }
 
     stage('Smoke Test') {
-      when {
-        expression { return params.RUN_SMOKE }
-      }
-      agent { label 'built-in' }
+      when { expression { return params.RUN_SMOKE } }
       steps {
-        sh 'IMAGE_REPO=${IMAGE_REPO} make ci-smoke'
+        sh '''
+          set -eux
+          IMAGE_REPO='${IMAGE_REPO}'
+          APP_VERSION='${APP_VERSION}'
+          IMAGE_REPO=$IMAGE_REPO APP_VERSION=$APP_VERSION make -C ${SERVICE_DIR} ci-smoke
+        '''
       }
     }
+
+    stage('(Optional) Tag Commit Variant') {
+      when { expression { return env.APP_VERSION } }
+      steps {
+        sh '''
+          set -eux
+          IMAGE_REPO='${IMAGE_REPO}'
+          APP_VERSION='${APP_VERSION}'
+          GIT_SHORT='${GIT_SHORT}'
+          BASE_IMG="${IMAGE_REPO}/flask-api:${APP_VERSION}"
+          COMMIT_TAG="${IMAGE_REPO}/flask-api:${APP_VERSION}-${GIT_SHORT}"
+          docker tag "$BASE_IMG" "$COMMIT_TAG"
+          docker image ls "$BASE_IMG" || true
+          docker image ls "$COMMIT_TAG" || true
+        '''
+      }
+    }
+
   }
 
   post {
-    success {
-      echo 'Pipeline SUCCESS ✅'
-    }
-    failure {
-      echo 'Pipeline FAILED ❌'
-    }
     always {
-      script {
-        def v = sh(returnStdout: true, script: 'cat VERSION').trim()
-        echo "Final version: ${v}"
-      }
+      echo "Result: ${currentBuild.currentResult}"
+      echo "Version: ${env.APP_VERSION ?: 'UNKNOWN'}"
     }
+    success { echo 'Pipeline SUCCESS ✅' }
+    failure { echo 'Pipeline FAILED ❌' }
   }
 }
+
