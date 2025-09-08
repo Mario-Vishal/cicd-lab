@@ -1,0 +1,80 @@
+pipeline {
+  agent none
+
+  options {
+    timestamps()
+    disableConcurrentBuilds()
+  }
+
+  /* Parameters allow you to flex without editing the Jenkinsfile */
+  parameters {
+    string(
+      name: 'IMAGE_REPO',
+      defaultValue: 'local',
+      description: 'Docker repository namespace (set to your Docker Hub username later for pushes)'
+    )
+    booleanParam(
+      name: 'RUN_SMOKE',
+      defaultValue: true,
+      description: 'Run the smoke test stage'
+    )
+  }
+
+  environment {
+    // Make available to make targets (passed explicitly in steps for clarity)
+    IMAGE_REPO = "${params.IMAGE_REPO}"
+  }
+
+  stages {
+
+    stage('Checkout & Inspect (Python Docker Agent)') {
+      agent {
+        docker {
+          image 'python:3.12-slim'
+          args '-u root:root'
+        }
+      }
+      steps {
+        checkout scm
+        sh 'echo ">>> VERSION:"; cat VERSION'
+        sh 'echo ">>> Python:"; python --version'
+        sh 'echo ">>> Git commit:"; git rev-parse --short HEAD'
+        sh 'echo ">>> Files:"; ls -1'
+      }
+    }
+
+    stage('Build Image') {
+      // If your controller node label shows as "master", change 'built-in' to 'master'
+      agent { label 'built-in' }
+      steps {
+        sh 'echo "Building with IMAGE_REPO=${IMAGE_REPO}"'
+        sh 'IMAGE_REPO=${IMAGE_REPO} make ci-build'
+      }
+    }
+
+    stage('Smoke Test') {
+      when {
+        expression { return params.RUN_SMOKE }
+      }
+      agent { label 'built-in' }
+      steps {
+        sh 'IMAGE_REPO=${IMAGE_REPO} make ci-smoke'
+      }
+    }
+  }
+
+  post {
+    success {
+      echo 'Pipeline SUCCESS ✅'
+    }
+    failure {
+      echo 'Pipeline FAILED ❌'
+    }
+    always {
+      script {
+        def v = sh(returnStdout: true, script: 'cat VERSION').trim()
+        echo "Final version: ${v}"
+      }
+    }
+  }
+}
