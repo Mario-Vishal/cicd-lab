@@ -134,8 +134,18 @@ stage('Smoke Test') {
 }
 
 stage('Push Image (GHCR)') {
+  // This works in both classic and multibranch
   when {
-    branch 'main'   // Only push from main; adjust if needed
+    expression {
+      // Determine branch name robustly
+      def b1 = env.BRANCH_NAME
+      if (b1 == null || b1.trim() == '') {
+        // Fallback: ask git directly
+        b1 = sh(returnStdout: true, script: 'git rev-parse --abbrev-ref HEAD').trim()
+      }
+      echo "Evaluated current branch for push condition: '${b1}'"
+      return (b1 == 'main')
+    }
   }
   environment {
     TARGET_REPO = "${REGISTRY}/${GHCR_USER}/${APP_NAME}"
@@ -147,41 +157,37 @@ stage('Push Image (GHCR)') {
                                       passwordVariable: 'GHCR_PAT')]) {
       sh '''
         set -eu
+
         echo "Logging in to GHCR..."
         echo "$GHCR_PAT" | docker login ghcr.io -u "$GHCR_USER_NAME" --password-stdin
 
-        echo "Source local images (before retag):"
+        echo "Local images before retag:"
         docker images | grep "${LOCAL_REPO}/${APP_NAME}" || true
 
-        # Re-tag base version
         echo "Retagging version ${APP_VERSION}..."
         docker tag ${LOCAL_REPO}/${APP_NAME}:${APP_VERSION} ${TARGET_REPO}:${APP_VERSION}
 
-        # Re-tag commit variant (if present)
         if docker image inspect ${LOCAL_REPO}/${APP_NAME}:${APP_VERSION}-${GIT_SHORT} > /dev/null 2>&1; then
           echo "Retagging commit variant ${APP_VERSION}-${GIT_SHORT}..."
           docker tag ${LOCAL_REPO}/${APP_NAME}:${APP_VERSION}-${GIT_SHORT} ${TARGET_REPO}:${APP_VERSION}-${GIT_SHORT}
         else
-          echo "Commit variant tag not found locally, skipping."
+          echo "Commit variant not present; skipping."
         fi
 
-        # (Optional) also push a 'latest' tag for convenience (lab only)
-        echo "Tagging 'latest' (lab convenience)..."
+        echo "Tagging 'latest' (lab use)..."
         docker tag ${LOCAL_REPO}/${APP_NAME}:${APP_VERSION} ${TARGET_REPO}:latest
 
-        echo "Pushing tags to GHCR..."
+        echo "Pushing tags..."
         docker push ${TARGET_REPO}:${APP_VERSION}
-        docker push ${TARGET_REPO}:${APP_VERSION}-${GIT_SHORT} || echo "Commit variant push skipped (tag not present)."
+        docker push ${TARGET_REPO}:${APP_VERSION}-${GIT_SHORT} || echo "Commit variant push skipped."
         docker push ${TARGET_REPO}:latest
 
-        echo "Image tags now in remote registry:"
-        echo " - ${TARGET_REPO}:${APP_VERSION}"
-        echo " - ${TARGET_REPO}:${APP_VERSION}-${GIT_SHORT} (if existed)"
-        echo " - ${TARGET_REPO}:latest"
+        echo "DONE pushing to: ${TARGET_REPO}"
       '''
     }
   }
 }
+
 
 
   }
