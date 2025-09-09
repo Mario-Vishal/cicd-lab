@@ -44,27 +44,34 @@ pipeline {
     }
 
     stage('Python Build & Tests') {
-      steps {
-        script {
-          docker.image('python:3.12-slim').inside('-u root:root') {
-            dir(env.SERVICE_DIR) {
-              sh '''
-                set -eux
-        	export PYTHONPATH=$(pwd):${PYTHONPATH:-}
-                python --version
-                if [ -f requirements.txt ]; then pip install --no-cache-dir -r requirements.txt; fi
-                if ls tests/*.py >/dev/null 2>&1; then
-                  pip install --no-cache-dir pytest
-                  pytest -q
-                else
-                  echo "No tests found."
-                fi
-              '''
-            }
-          }
+  steps {
+    script {
+      docker.image('python:3.12-slim').inside('-u root:root') {
+        dir(env.SERVICE_DIR) {
+          sh '''
+            set -euo pipefail
+            echo "Python path: $(which python)"
+            python --version
+            export PYTHONPATH=$(pwd):${PYTHONPATH:-}
+            export PIP_DISABLE_PIP_VERSION_CHECK=1
+            # Optional (keeps things clean and avoids root site-packages pollution)
+            python -m venv .venv
+            . .venv/bin/activate
+            python -m pip install --upgrade pip
+            if [ -f requirements.txt ]; then python -m pip install --no-cache-dir -r requirements.txt; fi
+            if ls tests/*.py >/dev/null 2>&1; then
+              echo "Running pytest..."
+              python -m pytest -q
+            else
+              echo "No tests found."
+            fi
+          '''
         }
       }
     }
+  }
+}
+
 
 stage('Build Image') {
   steps {
