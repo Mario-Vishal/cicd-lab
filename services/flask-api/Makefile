@@ -85,25 +85,27 @@ ci-smoke:
 	@set -e; \
 	VERSION=$$(cat VERSION); \
 	CONTAINER=ci-$(APP_NAME)-smoke; \
-	PORT=5001; \
-	echo "Starting container $$CONTAINER from image $(IMAGE_REPO)/$(APP_NAME):$$VERSION (mapping host $$PORT -> 5000)"; \
-	$(DOCKER) run -d --rm --name $$CONTAINER -p $$PORT:5000 $(IMAGE_REPO)/$(APP_NAME):$$VERSION; \
-	echo "Probing health endpoint with retries..."; \
-	for i in 1 2 3 4 5 6 7 8 9 10; do \
-	  if curl -s http://localhost:$$PORT/health | grep -qi "ok"; then \
-	    echo "Health check passed on attempt $$i"; \
-	    OK=1; break; \
+	HEALTH_URL=http://127.0.0.1:5000/health; \
+	echo "Starting container $$CONTAINER from image $(IMAGE_REPO)/$(APP_NAME):$$VERSION (no host port mapping)"; \
+	$(DOCKER) rm -f $$CONTAINER >/dev/null 2>&1 || true; \
+	$(DOCKER) run -d --name $$CONTAINER $(IMAGE_REPO)/$(APP_NAME):$$VERSION; \
+	echo "Probing health endpoint inside container..."; \
+	OK=0; \
+	for i in $$(seq 1 15); do \
+	  if $(DOCKER) exec $$CONTAINER python - <<'PY' >/dev/null 2>&1; then \
+	      echo "Health check PASSED on attempt $$i"; OK=1; break; \
+	  else \
+	      echo "Attempt $$i failed; retrying..."; sleep 1; \
 	  fi; \
-	  echo "Attempt $$i failed; retrying..."; \
-	  sleep 1; \
 	done; \
 	if [ "$$OK" != "1" ]; then \
 	  echo "Health check FAILED after retries. Showing logs:"; \
 	  $(DOCKER) logs $$CONTAINER || true; \
-	  $(DOCKER) stop $$CONTAINER || true; \
+	  $(DOCKER) rm -f $$CONTAINER >/dev/null 2>&1 || true; \
 	  exit 1; \
 	fi; \
-	$(DOCKER) stop $$CONTAINER >/dev/null
+	$(DOCKER) rm -f $$CONTAINER >/dev/null 2>&1 || true; \
+	echo "Smoke test complete."
 
 # ----- CLEAN -----
 clean:
