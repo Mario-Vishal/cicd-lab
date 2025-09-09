@@ -66,29 +66,31 @@ pipeline {
       }
     }
 
-    stage('Build Image') {
-      steps {
-        sh '''
-          set -eux
-          IMAGE_REPO='${IMAGE_REPO}'
-          APP_VERSION='${APP_VERSION}'
-          # Use the service Makefile
-          IMAGE_REPO=$IMAGE_REPO APP_VERSION=$APP_VERSION make -C ${SERVICE_DIR} ci-build
-        '''
-      }
+stage('Build Image') {
+  steps {
+    dir(env.SERVICE_DIR) {
+      sh '''
+        set -euo pipefail
+        echo "Using IMAGE_REPO='${IMAGE_REPO}' APP_VERSION='${APP_VERSION}'"
+        # Pass IMAGE_REPO into make (VERSION read from VERSION file)
+        make ci-build IMAGE_REPO="${IMAGE_REPO}"
+      '''
     }
+  }
+}
 
-    stage('Smoke Test') {
-      when { expression { return params.RUN_SMOKE } }
-      steps {
-        sh '''
-          set -eux
-          IMAGE_REPO='${IMAGE_REPO}'
-          APP_VERSION='${APP_VERSION}'
-          IMAGE_REPO=$IMAGE_REPO APP_VERSION=$APP_VERSION make -C ${SERVICE_DIR} ci-smoke
-        '''
-      }
+stage('Smoke Test') {
+  when { expression { return params.RUN_SMOKE } }
+  steps {
+    dir(env.SERVICE_DIR) {
+      sh '''
+        set -euo pipefail
+        echo "Smoke test for IMAGE_REPO='${IMAGE_REPO}'"
+        make ci-smoke IMAGE_REPO="${IMAGE_REPO}"
+      '''
     }
+  }
+}
 
     stage('(Optional) Tag Commit Variant') {
       when { expression { return env.APP_VERSION } }
