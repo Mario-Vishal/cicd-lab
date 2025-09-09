@@ -100,21 +100,39 @@ stage('Smoke Test') {
 }
 
     stage('(Optional) Tag Commit Variant') {
-      when { expression { return env.APP_VERSION } }
-      steps {
-        sh '''
-          set -eux
-          IMAGE_REPO='${IMAGE_REPO}'
-          APP_VERSION='${APP_VERSION}'
-          GIT_SHORT='${GIT_SHORT}'
-          BASE_IMG="${IMAGE_REPO}/flask-api:${APP_VERSION}"
-          COMMIT_TAG="${IMAGE_REPO}/flask-api:${APP_VERSION}-${GIT_SHORT}"
-          docker tag "$BASE_IMG" "$COMMIT_TAG"
-          docker image ls "$BASE_IMG" || true
-          docker image ls "$COMMIT_TAG" || true
-        '''
-      }
-    }
+  when {
+    expression { return env.GIT_SHORT && env.APP_VERSION }   // optional guard
+  }
+  steps {
+    sh '''
+      set -eu
+      echo "Tagging commit variant..."
+      echo "IMAGE_REPO=$IMAGE_REPO"
+      echo "APP_VERSION=$APP_VERSION"
+      echo "GIT_SHORT=$GIT_SHORT"
+
+      # Safety checks
+      [ -n "$IMAGE_REPO" ] || { echo "IMAGE_REPO is empty"; exit 1; }
+      [ -n "$APP_VERSION" ] || { echo "APP_VERSION is empty"; exit 1; }
+      [ -n "$GIT_SHORT" ] || { echo "GIT_SHORT is empty"; exit 1; }
+
+      # Force repo name lowercase (Docker requirement)
+      IMAGE_REPO_LC=$(printf '%s' "$IMAGE_REPO" | tr '[:upper:]' '[:lower:]')
+
+      BASE_TAG="$IMAGE_REPO_LC/flask-api:$APP_VERSION"
+      COMMIT_TAG="$IMAGE_REPO_LC/flask-api:$APP_VERSION-$GIT_SHORT"
+
+      echo "Base image tag:   $BASE_TAG"
+      echo "Commit image tag: $COMMIT_TAG"
+
+      docker image inspect "$BASE_TAG" >/dev/null 2>&1 || { echo "Image $BASE_TAG not found"; exit 1; }
+
+      docker tag "$BASE_TAG" "$COMMIT_TAG"
+      echo "Tagged: $COMMIT_TAG"
+    '''
+  }
+}
+
 
   }
 
