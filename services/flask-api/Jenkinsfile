@@ -150,7 +150,7 @@ stage('Push Image (GHCR)') {
       )
     ]) {
       sh '''
-        set -euo pipefail
+        set -eu
 
         echo "Logging into GHCR..."
         echo "$GHCR_PAT" | docker login ghcr.io -u "$GHCR_USER_NAME" --password-stdin
