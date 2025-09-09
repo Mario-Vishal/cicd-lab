@@ -134,59 +134,63 @@ stage('Smoke Test') {
 }
 
 stage('Push Image (GHCR)') {
-  // This works in both classic and multibranch
-  when {
-    expression {
-      // Determine branch name robustly
-      def b1 = env.BRANCH_NAME
-      if (b1 == null || b1.trim() == '') {
-        // Fallback: ask git directly
-        b1 = sh(returnStdout: true, script: 'git rev-parse --abbrev-ref HEAD').trim()
-      }
-      echo "Evaluated current branch for push condition: '${b1}'"
-      return (b1 == 'main')
-    }
-  }
   environment {
-    TARGET_REPO = "${REGISTRY}/${GHCR_USER}/${APP_NAME}"
+    REGISTRY        = 'ghcr.io'
+    GHCR_NAMESPACE  = 'mario-vishal'
+    SOURCE_REPO     = "${IMAGE_REPO}/flask-api"           // e.g. local/flask-api
+    TARGET_REPO     = "ghcr.io/${GHCR_NAMESPACE}/flask-api"
   }
   steps {
-    echo "Preparing to push image to GHCR: ${TARGET_REPO}"
-    withCredentials([usernamePassword(credentialsId: 'ghcr-creds',
-                                      usernameVariable: 'GHCR_USER_NAME',
-                                      passwordVariable: 'GHCR_PAT')]) {
+    echo "Unconditional push enabled. Preparing to push image to: ${TARGET_REPO}"
+    withCredentials([
+      usernamePassword(
+        credentialsId: 'ghcr-creds',
+        usernameVariable: 'GHCR_USER_NAME',
+        passwordVariable: 'GHCR_PAT'
+      )
+    ]) {
       sh '''
-        set -eu
+        set -euo pipefail
 
-        echo "Logging in to GHCR..."
+        echo "Logging into GHCR..."
         echo "$GHCR_PAT" | docker login ghcr.io -u "$GHCR_USER_NAME" --password-stdin
 
-        echo "Local images before retag:"
-        docker images | grep "${LOCAL_REPO}/${APP_NAME}" || true
+        echo "Source images present:"
+        docker images | grep "flask-api" || true
 
-        echo "Retagging version ${APP_VERSION}..."
-        docker tag ${LOCAL_REPO}/${APP_NAME}:${APP_VERSION} ${TARGET_REPO}:${APP_VERSION}
+        echo "Retagging version tag..."
+        docker tag ${SOURCE_REPO}:${APP_VERSION} ${TARGET_REPO}:${APP_VERSION}
 
-        if docker image inspect ${LOCAL_REPO}/${APP_NAME}:${APP_VERSION}-${GIT_SHORT} > /dev/null 2>&1; then
+        if docker image inspect ${SOURCE_REPO}:${APP_VERSION}-${GIT_SHORT} > /dev/null 2>&1; then
           echo "Retagging commit variant ${APP_VERSION}-${GIT_SHORT}..."
-          docker tag ${LOCAL_REPO}/${APP_NAME}:${APP_VERSION}-${GIT_SHORT} ${TARGET_REPO}:${APP_VERSION}-${GIT_SHORT}
+          docker tag ${SOURCE_REPO}:${APP_VERSION}-${GIT_SHORT} ${TARGET_REPO}:${APP_VERSION}-${GIT_SHORT}
+          HAVE_COMMIT_VARIANT=1
         else
-          echo "Commit variant not present; skipping."
+          echo "Commit variant not found; skipping."
+          HAVE_COMMIT_VARIANT=0
         fi
 
-        echo "Tagging 'latest' (lab use)..."
-        docker tag ${LOCAL_REPO}/${APP_NAME}:${APP_VERSION} ${TARGET_REPO}:latest
+        echo "Tagging 'latest'..."
+        docker tag ${SOURCE_REPO}:${APP_VERSION} ${TARGET_REPO}:latest
 
         echo "Pushing tags..."
         docker push ${TARGET_REPO}:${APP_VERSION}
-        docker push ${TARGET_REPO}:${APP_VERSION}-${GIT_SHORT} || echo "Commit variant push skipped."
+        if [ "$HAVE_COMMIT_VARIANT" = "1" ]; then
+          docker push ${TARGET_REPO}:${APP_VERSION}-${GIT_SHORT} || echo "Commit variant push failed (non-fatal)."
+        fi
         docker push ${TARGET_REPO}:latest
 
-        echo "DONE pushing to: ${TARGET_REPO}"
+        echo "Push complete. Resulting remote tags should include:"
+        echo "  ${TARGET_REPO}:${APP_VERSION}"
+        echo "  ${TARGET_REPO}:latest"
+        if [ "$HAVE_COMMIT_VARIANT" = "1" ]; then
+          echo "  ${TARGET_REPO}:${APP_VERSION}-${GIT_SHORT}"
+        fi
       '''
     }
   }
 }
+
 
 
 
